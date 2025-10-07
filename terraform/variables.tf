@@ -1,12 +1,9 @@
-variable "role_names" {
-  type = list(string)
-}
-
 variable "region" {
-  type    = string
-  default = "us-east-1"
+  description = "AWS region to run prechecks in"
+  type        = string
 }
 
-terraform {
-  required_version = ">= 1.0"
+variable "role_names" {
+  description = "List of IAM role names to validate existence"
+  type        = list(string)
 }
