@@ -1,5 +1,5 @@
 provider "aws" {
-  region = var.region
+  region = ap-south-1
   # credentials come from env (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
 }
 
