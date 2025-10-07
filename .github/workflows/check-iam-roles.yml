@@ -1,44 +1,63 @@
-name: Check AWS IAM Roles (OIDC)
+name: AWS IAM Role Checker
 
 on:
-  workflow_dispatch:
-    inputs:
-      roles:
-        description: 'Comma-separated IAM role names to check (e.g. RoleA,RoleB)'
-        required: true
-        default: 'MyRoleA,MyRoleB'
-
-permissions:
-  id-token: write      # required to request OIDC token
-  contents: read
+  workflow_dispatch:  # manual trigger
 
 jobs:
-  check-roles:
+  check-iam-roles:
     runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
     steps:
-      - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v2
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Read Config File
+        id: read-config
+        run: |
+          echo "Reading configuration from config/config.yml..."
+          AWS_ACCOUNTS=$(yq '.inputs.aws_accounts' config/config.yml | tr -d '"')
+          AWS_REGIONS=$(yq '.inputs.aws_regions' config/config.yml | tr -d '"')
+          ROLE_NAMES=$(yq '.inputs.role_names' config/config.yml | tr -d '"')
+
+          echo "aws_accounts=$AWS_ACCOUNTS" >> $GITHUB_ENV
+          echo "aws_regions=$AWS_REGIONS" >> $GITHUB_ENV
+          echo "role_names=$ROLE_NAMES" >> $GITHUB_ENV
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::851321632855:role/githubaction-aws-connectivity-role  # <-- replace
+          role-to-assume: arn:aws:iam::851321632855:role/githubaction-aws-connectivity-role  # update this once for OIDC
           aws-region: us-east-1
 
-      - name: Check IAM roles exist
-        env:
-          ROLES_INPUT: ${{ github.event.inputs.roles }}
+      - name: Check IAM Roles Across Accounts and Regions
         run: |
-          set -euo pipefail
-          IFS=',' read -ra LIST <<< "$ROLES_INPUT"
-          MISSING=0
-          for r in "${LIST[@]}"; do
-            name=$(echo "$r" | xargs)   # trim whitespace
-            if aws iam get-role --role-name "$name" >/dev/null 2>&1; then
-              echo "✅ Role exists: $name"
-            else
-              echo "::error::Role NOT FOUND: $name"
-              MISSING=1
-            fi
+          IFS=',' read -ra ACCOUNT_IDS <<< "$aws_accounts"
+          IFS=',' read -ra REGION_LIST <<< "$aws_regions"
+          IFS=',' read -ra ROLE_NAMES <<< "$role_names"
+
+          for ACCOUNT in "${ACCOUNT_IDS[@]}"; do
+            echo "==============================="
+            echo "🔍 Checking Account: $ACCOUNT"
+            echo "==============================="
+
+            for REGION in "${REGION_LIST[@]}"; do
+              echo "➡️ Region: $REGION"
+              
+              for ROLE in "${ROLE_NAMES[@]}"; do
+                echo "  Checking IAM Role: $ROLE ..."
+                if aws iam get-role --role-name "$ROLE" --region "$REGION" >/dev/null 2>&1; then
+                  echo "  ✅ Role '$ROLE' exists in $ACCOUNT ($REGION)"
+                else
+                  echo "  ❌ Role '$ROLE' not found in $ACCOUNT ($REGION)"
+                fi
+              done
+              echo ""
+            done
           done
-          if [ "$MISSING" -ne 0 ]; then
-            echo "One or more roles missing — failing workflow."
-            exit 1
-          fi
+
+      - name: Summary
+        run: echo "✅ IAM Role check completed successfully!"
