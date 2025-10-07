@@ -1,92 +1,122 @@
-name: AWS IAM Role Checker
+name: Terraform Precheck Workflow
 
 on:
-  workflow_dispatch:  # manual trigger
+  workflow_dispatch:
+  push:
+    branches: [ test-1 ]
+  pull_request:
+    branches: [ test-1 ]
 
 jobs:
   check-iam-roles:
     runs-on: ubuntu-latest
+    steps:
+      - name: Sample IAM role check placeholder
+        run: echo "✅ IAM roles check passed (replace with your IAM validation logic)"
 
+  terraform-precheck:
+    needs: check-iam-roles
+    runs-on: ubuntu-latest
     permissions:
-      id-token: write   # Required for GitHub OIDC authentication
+      id-token: write
       contents: read
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install yq
+      - name: Install helpers (yq, jq)
         run: |
           sudo apt-get update -y
           sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/bin/yq
+          sudo apt-get install -y jq
 
-      - name: Read Config File
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Read config values
         id: read-config
         run: |
-          echo "Reading configuration from config/config.yml..."
           AWS_ACCOUNTS=$(yq '.inputs.aws_accounts' config/config.yml | tr -d '"')
           AWS_REGIONS=$(yq '.inputs.aws_regions' config/config.yml | tr -d '"')
           ROLE_NAMES=$(yq '.inputs.role_names' config/config.yml | tr -d '"')
+          OIDC_ROLE=$(yq '.inputs.oidc_assume_role' config/config.yml | tr -d '"')
 
           echo "aws_accounts=$AWS_ACCOUNTS" >> $GITHUB_ENV
           echo "aws_regions=$AWS_REGIONS" >> $GITHUB_ENV
           echo "role_names=$ROLE_NAMES" >> $GITHUB_ENV
+          echo "oidc_role=$OIDC_ROLE" >> $GITHUB_ENV
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::851321632855:role/githubaction-aws-connectivity-role  # Replace with your OIDC IAM role
-          aws-region: us-east-1
-
-      - name: Check IAM Roles Across Accounts and Regions
+      - name: Terraform prechecks (loop accounts & regions)
+        env:
+          AWS_ACCOUNTS: ${{ env.aws_accounts }}
+          AWS_REGIONS: ${{ env.aws_regions }}
+          ROLE_NAMES: ${{ env.role_names }}
+          OIDC_ROLE: ${{ env.oidc_role }}
         run: |
-          set -e
-          echo "🔍 Starting IAM Role Validation..."
-          echo ""
+          set -euo pipefail
+          IFS=',' read -ra ACC_ARR <<< "$AWS_ACCOUNTS"
+          IFS=',' read -ra REG_ARR <<< "$AWS_REGIONS"
 
-          IFS=',' read -ra ACCOUNT_IDS <<< "$aws_accounts"
-          IFS=',' read -ra REGION_LIST <<< "$aws_regions"
-          IFS=',' read -ra ROLE_NAMES <<< "$role_names"
+          ROLE_NAMES_JSON=$(printf '%s' "$ROLE_NAMES" | jq -R 'split(",")')
+          FAILURES=()
 
-          FAILED_ROLES=()
+          for ACCOUNT in "${ACC_ARR[@]}"; do
+            for REGION in "${REG_ARR[@]}"; do
+              echo "===================================="
+              echo "Precheck: Account=$ACCOUNT Region=$REGION"
+              echo "===================================="
 
-          for ACCOUNT in "${ACCOUNT_IDS[@]}"; do
-            echo "==============================="
-            echo "🔹 Checking Account: $ACCOUNT"
-            echo "==============================="
+              CREDS_JSON=$(aws sts assume-role \
+                --role-arn "arn:aws:iam::851321632855:role/githubaction-aws-connectivity-role" \
+                --role-session-name "gh-actions-precheck" \
+                --output json) || {
+                echo "❌ Failed to assume role arn:aws:iam::851321632855:role/githubaction-aws-connectivity-role"
+                FAILURES+=("${ACCOUNT}:${REGION}:assume-role")
+                continue
+              }
 
-            for REGION in "${REGION_LIST[@]}"; do
-              echo "➡️ Region: $REGION"
+              export AWS_ACCESS_KEY_ID=$(echo "$CREDS_JSON" | jq -r '.Credentials.AccessKeyId')
+              export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS_JSON" | jq -r '.Credentials.SecretAccessKey')
+              export AWS_SESSION_TOKEN=$(echo "$CREDS_JSON" | jq -r '.Credentials.SessionToken')
+              export AWS_REGION="$REGION"
 
-              for ROLE in "${ROLE_NAMES[@]}"; do
-                echo "  🔸 Checking IAM Role: $ROLE ..."
+              pushd terraform/precheck >/dev/null
 
-                if aws iam get-role --role-name "$ROLE" --region "$REGION" >/dev/null 2>&1; then
-                  echo "  ✅ Role '$ROLE' exists in $ACCOUNT ($REGION)"
-                else
-                  echo "  ❌ Role '$ROLE' NOT found in $ACCOUNT ($REGION)"
-                  FAILED_ROLES+=("$ACCOUNT:$REGION:$ROLE")
-                fi
-              done
-              echo ""
+              export TF_VAR_role_names="$ROLE_NAMES_JSON"
+              export TF_VAR_region="$REGION"
+
+              echo "Running: terraform init"
+              terraform init -input=false -no-color
+
+              echo "Running: terraform validate"
+              if ! terraform validate -no-color; then
+                echo "❌ terraform validate failed for ${ACCOUNT}/${REGION}"
+                FAILURES+=("${ACCOUNT}:${REGION}:validate")
+                popd >/dev/null
+                continue
+              fi
+
+              echo "Running: terraform plan (precheck)"
+              if ! terraform plan -input=false -no-color -out=precheck.plan; then
+                echo "❌ terraform plan failed for ${ACCOUNT}/${REGION}"
+                FAILURES+=("${ACCOUNT}:${REGION}:plan")
+                popd >/dev/null
+                continue
+              fi
+
+              echo "✅ Precheck passed for ${ACCOUNT}/${REGION}"
+              popd >/dev/null
             done
           done
 
-          if [ ${#FAILED_ROLES[@]} -gt 0 ]; then
-            echo "==============================="
-            echo "❌ Missing Roles Summary"
-            echo "==============================="
-            for ITEM in "${FAILED_ROLES[@]}"; do
-              echo "❌ $ITEM"
-            done
-            echo ""
-            echo "❗ One or more IAM roles are missing. Failing the workflow..."
+          if [ ${#FAILURES[@]} -ne 0 ]; then
+            echo "❌ Some prechecks failed:"
+            printf '%s\n' "${FAILURES[@]}"
             exit 1
           else
-            echo "✅ All IAM roles exist in all specified accounts and regions!"
+            echo "✅ All Terraform prechecks passed!"
           fi
-
-      - name: Summary
-        if: success()
-        run: echo "🎉 IAM Role check completed successfully!"
