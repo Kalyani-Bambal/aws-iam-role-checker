@@ -20,7 +20,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v2
         with:
           role-to-assume: arn:aws:iam::851321632855:role/githubaction-aws-connectivity-role  # <-- replace
-         # aws-region: us-east-1
+          aws-region: us-east-1
 
       - name: Check IAM roles exist
         env:
