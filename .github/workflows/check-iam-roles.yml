@@ -8,12 +8,18 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write
+      id-token: write   # Required for GitHub OIDC authentication
       contents: read
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo apt-get update -y
+          sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/bin/yq
 
       - name: Read Config File
         id: read-config
@@ -30,34 +36,57 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::851321632855:role/githubaction-aws-connectivity-role  # update this once for OIDC
+          role-to-assume: arn:aws:iam::851321632855:role/githubaction-aws-connectivity-role  # Replace with your OIDC IAM role
           aws-region: us-east-1
 
       - name: Check IAM Roles Across Accounts and Regions
         run: |
+          set -e
+          echo "🔍 Starting IAM Role Validation..."
+          echo ""
+
           IFS=',' read -ra ACCOUNT_IDS <<< "$aws_accounts"
           IFS=',' read -ra REGION_LIST <<< "$aws_regions"
           IFS=',' read -ra ROLE_NAMES <<< "$role_names"
 
+          FAILED_ROLES=()
+
           for ACCOUNT in "${ACCOUNT_IDS[@]}"; do
             echo "==============================="
-            echo "🔍 Checking Account: $ACCOUNT"
+            echo "🔹 Checking Account: $ACCOUNT"
             echo "==============================="
 
             for REGION in "${REGION_LIST[@]}"; do
               echo "➡️ Region: $REGION"
-              
+
               for ROLE in "${ROLE_NAMES[@]}"; do
-                echo "  Checking IAM Role: $ROLE ..."
+                echo "  🔸 Checking IAM Role: $ROLE ..."
+
                 if aws iam get-role --role-name "$ROLE" --region "$REGION" >/dev/null 2>&1; then
                   echo "  ✅ Role '$ROLE' exists in $ACCOUNT ($REGION)"
                 else
-                  echo "  ❌ Role '$ROLE' not found in $ACCOUNT ($REGION)"
+                  echo "  ❌ Role '$ROLE' NOT found in $ACCOUNT ($REGION)"
+                  FAILED_ROLES+=("$ACCOUNT:$REGION:$ROLE")
                 fi
               done
               echo ""
             done
           done
 
+          if [ ${#FAILED_ROLES[@]} -gt 0 ]; then
+            echo "==============================="
+            echo "❌ Missing Roles Summary"
+            echo "==============================="
+            for ITEM in "${FAILED_ROLES[@]}"; do
+              echo "❌ $ITEM"
+            done
+            echo ""
+            echo "❗ One or more IAM roles are missing. Failing the workflow..."
+            exit 1
+          else
+            echo "✅ All IAM roles exist in all specified accounts and regions!"
+          fi
+
       - name: Summary
-        run: echo "✅ IAM Role check completed successfully!"
+        if: success()
+        run: echo "🎉 IAM Role check completed successfully!"
