@@ -1,0 +1,44 @@
+name: Check AWS IAM Roles (OIDC)
+
+on:
+  workflow_dispatch:
+    inputs:
+      roles:
+        description: 'Comma-separated IAM role names to check (e.g. RoleA,RoleB)'
+        required: true
+        default: 'MyRoleA,MyRoleB'
+
+permissions:
+  id-token: write      # required to request OIDC token
+  contents: read
+
+jobs:
+  check-roles:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::851321632855:role/githubaction-aws-connectivity-role  # <-- replace
+         # aws-region: us-east-1
+
+      - name: Check IAM roles exist
+        env:
+          ROLES_INPUT: ${{ github.event.inputs.roles }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra LIST <<< "$ROLES_INPUT"
+          MISSING=0
+          for r in "${LIST[@]}"; do
+            name=$(echo "$r" | xargs)   # trim whitespace
+            if aws iam get-role --role-name "$name" >/dev/null 2>&1; then
+              echo "✅ Role exists: $name"
+            else
+              echo "::error::Role NOT FOUND: $name"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            echo "One or more roles missing — failing workflow."
+            exit 1
+          fi
