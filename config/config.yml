@@ -1,4 +1,4 @@
 inputs:
   aws_accounts: "851321632855"
   aws_regions: "us-east-1,ap-south-1"
-  role_names: "terraform-role"
+  role_names: "terraform-role,demo-ec2role-1,demo-ec2role-kalyani,ebs-volume-check-role-gv5vz5a9"
