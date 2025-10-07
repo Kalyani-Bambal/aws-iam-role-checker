@@ -1,5 +1,5 @@
-# aws-iam-role-checker
-This repository holds a GitHub Actions workflow that checks if specific IAM roles exist in your AWS account. It’s safe, reusable, and automated using OpenID Connect (OIDC) (so no AWS keys in GitHub Secrets).
+## aws-iam-role-checker:
+**(This repository holds a GitHub Actions workflow that checks if specific IAM roles exist in your AWS account. It’s safe, reusable, and automated using OpenID Connect (OIDC) (so no AWS keys in GitHub Secrets).)**
 
 
 # 🛡️ AWS IAM Role Checker (GitHub Actions + OIDC)
@@ -55,7 +55,7 @@ inputs:
 
 ---
 
-**🧠 How It Works**
+## 🧠 How It Works
 
 1. GitHub Actions runs on demand using the workflow_dispatch trigger.
 
@@ -74,7 +74,7 @@ inputs:
 
 ---
 
-**🔒 Security Setup**
+## 🔒 Security Setup
 1. Create an OIDC Provider in AWS
 
 AWS Console → IAM → Identity Providers → Add Provider
@@ -125,7 +125,7 @@ Example IAM policy for that role:
 
 ---
 
-**▶️ Usage**
+## ▶️ Usage
 
 1. Go to the Actions tab in GitHub.
 
@@ -138,7 +138,7 @@ Example IAM policy for that role:
 
 ---
 
-**🧩 Future Enhancements**
+## 🧩 Future Enhancements
 
 - 🔁 Dynamic multi-account role assumption (different OIDC roles per account).
 
